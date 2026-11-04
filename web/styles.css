@@ -628,6 +628,56 @@ body[data-view="history"] .detail-panel {
   margin-bottom: 7px;
 }
 
+.intraday-body {
+  padding: 14px;
+}
+
+.intraday-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.intraday-metrics div,
+.macro-note {
+  border: 1px solid rgba(45, 32, 27, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 247, 239, 0.9);
+  padding: 10px 12px;
+}
+
+.intraday-metrics strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+.flag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.flag-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ffe4e9;
+  color: #8a3148;
+  font-size: 12px;
+}
+
+.macro-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.section-gap {
+  margin-top: 16px;
+}
+
 .method-strip {
   display: flex;
   gap: 8px;
@@ -1354,7 +1404,8 @@ tbody tr.selected {
     flex-wrap: wrap;
   }
 
-  .signal-strip {
+  .signal-strip,
+  .intraday-metrics {
     grid-template-columns: 1fr 1fr;
   }
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>九点猫研 CatDesk 9</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="styles.css?v=20260705-asia1" />
+    <link rel="stylesheet" href="styles.css?v=20261104-cn1" />
   </head>
   <body>
     <div class="app-shell">
@@ -23,6 +23,10 @@
           <button class="nav-tab active" data-view="ashare">
             <span class="icon" data-icon="scan"></span>
             A股早报
+          </button>
+          <button class="nav-tab" data-view="intraday">
+            <span class="icon" data-icon="chart"></span>
+            盘中异动
           </button>
           <button class="nav-tab" data-view="us">
             <span class="icon" data-icon="target"></span>
@@ -120,6 +124,7 @@
                 <select id="themeFilter" class="select"></select>
               </div>
             </div>
+            <div id="macroStrip" class="method-strip"></div>
             <div id="themeCards" class="theme-rail"></div>
             <div class="table-wrap">
               <table>
@@ -140,6 +145,16 @@
                 <tbody id="ashareRows"></tbody>
               </table>
             </div>
+          </section>
+
+          <section class="main-panel hidden" data-panel="intraday">
+            <div class="panel-head">
+              <div>
+                <h2>盘中异动</h2>
+                <p>板块涨幅、涨停与成交额、候选池波动和放量、政策快讯。只做观察，不是买卖指令。</p>
+              </div>
+            </div>
+            <div id="intradayBody" class="intraday-body"></div>
           </section>
 
           <section class="main-panel hidden" data-panel="us">
@@ -319,6 +334,6 @@
         </div>
       </main>
     </div>
-    <script src="app.js?v=20260705-asia1"></script>
+    <script src="app.js?v=20261104-cn1"></script>
   </body>
 </html>

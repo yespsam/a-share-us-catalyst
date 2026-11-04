@@ -336,6 +336,104 @@ class AkshareProvider:
             )
         return [item for item in news if item["title"]]
 
+    def macro_news(self, limit: int = 40) -> list[dict[str, str]]:
+        cache_name = "macro_news_v1"
+        cached = self.cache.get(cache_name, max_age_hours=0.5)
+        if cached is not None:
+            return _records(cached)[:limit]
+        items: list[dict[str, Any]] = []
+        try:
+            from .cn_public import fetch_macro_news
+
+            items = fetch_macro_news(_curl_text, _curl_json, timeout=self.timeout, limit=max(40, limit))
+        except Exception:
+            items = []
+        if items:
+            self.cache.put(cache_name, pd.DataFrame(items))
+            return items[:limit]
+        stale = self.cache.get(cache_name)
+        if stale is not None and not stale.empty:
+            rows = _records(stale)[:limit]
+            for row in rows:
+                row["stale"] = "1"
+            return rows
+        return []
+
+    def market_overview(self) -> dict[str, Any]:
+        from ..clock import shanghai_now
+        from .cn_public import fetch_market_overview
+
+        cache_name = "market_overview_v1"
+        cached = self.cache.get(cache_name, max_age_hours=0.2)
+        if cached is not None:
+            return _json_payload(cached)
+        now = shanghai_now()
+        try:
+            overview = fetch_market_overview(
+                _curl_text,
+                _curl_json,
+                timeout=self.timeout,
+                today=now.date(),
+                now=now,
+            )
+        except Exception as exc:
+            overview = {"available": False, "warnings": [exc.__class__.__name__], "indices": [], "source": ""}
+        overview["asof"] = now.isoformat()
+        if overview.get("available"):
+            self.cache.put(cache_name, pd.DataFrame([{"payload": json.dumps(overview, ensure_ascii=False)}]))
+            return overview
+        stale = self.cache.get(cache_name)
+        if stale is not None and not stale.empty:
+            restored = _json_payload(stale)
+            restored["note"] = f"{restored.get('note') or ''} 使用过期缓存。".strip()
+            restored["stale"] = True
+            return restored
+        return overview
+
+    def sector_boards(self, limit: int = 20) -> list[dict[str, Any]]:
+        from .cn_public import fetch_sector_boards
+
+        cache_name = f"sector_boards_v1_{int(limit)}"
+        cached = self.cache.get(cache_name, max_age_hours=0.2)
+        if cached is not None:
+            return _records(cached)
+        try:
+            rows, _warnings = fetch_sector_boards(_curl_json, timeout=self.timeout, limit=limit)
+        except Exception:
+            rows = []
+        if rows:
+            self.cache.put(cache_name, pd.DataFrame(rows))
+            return rows
+        stale = self.cache.get(cache_name)
+        if stale is not None and not stale.empty:
+            rows = _records(stale)
+            for row in rows:
+                row["stale"] = "1"
+            return rows
+        return []
+
+    def quote_candidates(self, codes: list[str]) -> dict[str, dict[str, Any]]:
+        from .cn_public import fetch_quote_batch
+
+        normalized = [str(code).zfill(6) for code in codes]
+        if not normalized:
+            return {}
+        digest = _quote_digest(normalized)
+        cache_name = f"a_quotes_{digest}"
+        cached = self.cache.get(cache_name, max_age_hours=0.1)
+        if cached is not None:
+            return {str(row.get("code")).zfill(6): row for row in _records(cached) if row.get("code")}
+        merged: dict[str, dict[str, Any]] = {}
+        for offset in range(0, len(normalized), 40):
+            chunk = normalized[offset : offset + 40]
+            try:
+                merged.update(fetch_quote_batch(_curl_text, _curl_json, chunk, timeout=self.timeout))
+            except Exception:
+                continue
+        if merged:
+            self.cache.put(cache_name, pd.DataFrame(list(merged.values())))
+        return merged
+
     def _yahoo_us_history(self, ticker: str, start: date, end: date) -> pd.DataFrame:
         period1 = int(datetime.combine(start, datetime_time.min, tzinfo=timezone.utc).timestamp())
         period2 = int(datetime.combine(end + timedelta(days=1), datetime_time.min, tzinfo=timezone.utc).timestamp())
@@ -548,6 +646,37 @@ class AkshareProvider:
                 }
             )
         return pd.DataFrame(rows)
+
+
+def _records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    if df is None or df.empty:
+        return []
+    rows = []
+    for raw in df.to_dict(orient="records"):
+        item = {}
+        for key, value in raw.items():
+            if pd.isna(value):
+                item[key] = None
+            else:
+                item[key] = value
+        rows.append(item)
+    return rows
+
+
+def _json_payload(df: pd.DataFrame) -> dict[str, Any]:
+    if df is None or df.empty or "payload" not in df.columns:
+        return {"available": False}
+    try:
+        payload = json.loads(df.iloc[0]["payload"])
+    except (TypeError, json.JSONDecodeError):
+        return {"available": False}
+    return payload if isinstance(payload, dict) else {"available": False}
+
+
+def _quote_digest(codes: list[str]) -> str:
+    import hashlib
+
+    return hashlib.sha1(",".join(sorted(codes)).encode("utf-8")).hexdigest()[:12]
 
 
 def _first_value(row: pd.Series, names: list[str], default: Any) -> Any:

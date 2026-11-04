@@ -28,6 +28,7 @@ class Theme:
     logic: str
     us_tickers: list[UsTicker]
     candidates: list[Candidate]
+    policy_keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ def load_config(path: Union[str, Path]) -> AppConfig:
                     )
                     for item in theme.get("candidates", [])
                 ],
+                policy_keywords=tuple(str(word).strip() for word in theme.get("policy_keywords", []) if str(word).strip()),
             )
         )
     return AppConfig(report=raw.get("report", {}), themes=themes)
