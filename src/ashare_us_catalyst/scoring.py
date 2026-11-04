@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional, Protocol
 
 import numpy as np
 import pandas as pd
 
+from .clock import shanghai_now
 from .config import Candidate, Theme
+from .macro_news import map_macro_news, match_sector_for_theme
 from .providers.common import format_money, pct_fmt, serialize_kline, to_number
 
 
@@ -55,6 +57,38 @@ NEGATIVE_NEWS_WORDS = [
     "质押",
 ]
 
+# Positive weights in the legacy profile sum to 0.96. Risk stays a separate
+# penalty so the old numeric scale is unchanged. China-local v1 keeps that
+# 0.96 sum and moves 0.22 onto the local catalyst from US signal, history, and momentum.
+LEGACY_WEIGHTS = {
+    "signal": 0.34,
+    "history": 0.32,
+    "momentum": 0.12,
+    "liquidity": 0.08,
+    "news": 0.10,
+    "china_catalyst": 0.0,
+}
+CHINA_LOCAL_WEIGHTS = {
+    "signal": 0.24,
+    "history": 0.22,
+    "momentum": 0.10,
+    "liquidity": 0.08,
+    "news": 0.10,
+    "china_catalyst": 0.22,
+}
+SCORING_PROFILES = {
+    "legacy": {
+        "label": "旧口径",
+        "weights": LEGACY_WEIGHTS,
+        "note": "美股主题信号 34%、历史次日 32%、动量 12%、流动性 8%、个股新闻 10%，正向权重合计 96%，风险另扣。回测继续使用这一口径，因为历史政策、涨停情绪和板块资金无法逐日复原。",
+    },
+    "china_local_v1": {
+        "label": "中国本地催化",
+        "weights": CHINA_LOCAL_WEIGHTS,
+        "note": "美股主题信号 24%、历史次日 22%、中国本地催化 22%、动量 10%、个股新闻 10%、流动性 8%，正向权重合计 96%，风险另扣。中国本地催化综合政策/宏观新闻映射、涨停与跌停家数、主题板块涨跌，以及个股量比、换手和成交额。缺失的分项保持中性，不把没有读到的数据当成利好或利空。输出是研究候选和风险提示，不是买入指令。",
+    },
+}
+
 
 def rank_report(
     themes: list[Theme],
@@ -65,8 +99,20 @@ def rank_report(
     lookback_days: int = 420,
     skip_news: bool = False,
     max_themes: Optional[int] = None,
+    skip_macro: bool = False,
+    legacy_weights: bool = False,
+    now: Optional[datetime] = None,
 ) -> dict[str, Any]:
     start = report_date - timedelta(days=lookback_days)
+    moment = shanghai_now(now)
+    china_inputs, scoring = prepare_china_scoring(
+        themes,
+        provider,
+        report_date=report_date,
+        skip_macro=skip_macro,
+        legacy_weights=legacy_weights,
+        now=moment,
+    )
     theme_blocks: list[dict[str, Any]] = []
 
     ranked_theme_inputs: list[tuple[Theme, Optional[dict[str, Any]]]]
@@ -86,15 +132,25 @@ def rank_report(
             top_n=top_n,
             skip_news=skip_news,
             precomputed_signal=signal,
+            china_inputs=china_inputs,
+            weight_profile=scoring["profile"],
         )
         theme_blocks.append(block)
 
     theme_blocks.sort(key=lambda item: item["signal"]["score"], reverse=True)
+    leaders = _sector_leaders(china_inputs.get("boards") or [])
 
     return {
         "date": str(report_date),
-        "generated_at": pd.Timestamp.now(tz="Asia/Shanghai").isoformat(),
+        "generated_at": moment.isoformat(),
         "themes": theme_blocks,
+        "macro": china_inputs.get("macro") or {},
+        "china_market": {
+            "overview": _public_market_overview(china_inputs.get("market") or {}),
+            "sector_leaders": leaders,
+            "warnings": china_inputs.get("warnings") or [],
+        },
+        "scoring": scoring,
     }
 
 
@@ -107,10 +163,15 @@ def rank_theme(
     top_n: int,
     skip_news: bool,
     precomputed_signal: Optional[dict[str, Any]] = None,
+    china_inputs: Optional[dict[str, Any]] = None,
+    weight_profile: str = "legacy",
 ) -> dict[str, Any]:
     signal = precomputed_signal or current_theme_signal(theme, provider)
     theme_series = historical_theme_series(theme, provider, start, end)
     ranked: list[dict[str, Any]] = []
+    theme_policy = ((china_inputs or {}).get("macro") or {}).get("themes", {}).get(theme.id, {})
+    sector = match_sector_for_theme(theme, (china_inputs or {}).get("boards") or []) if weight_profile == "china_local_v1" else None
+    market = (china_inputs or {}).get("market") or {}
 
     for candidate in theme.candidates:
         snapshot = _safe_call(lambda: provider.a_snapshot(candidate.code), default={})
@@ -119,8 +180,35 @@ def rank_theme(
         stats = historical_stats(hist, theme_series)
         news = [] if skip_news else _safe_call(lambda: provider.stock_news(candidate.code, candidate.name, 5), default=[])
         news_score, news_hits, news_risks = score_news(news)
-        total, factors = score_candidate(signal, stats, snapshot, news_score, candidate)
-        analyst = analyst_profile(total, signal, stats, snapshot, news_score, news_hits, news_risks, candidate)
+        china = china_catalyst_score(
+            policy_score=theme_policy.get("score"),
+            policy_available=bool(theme_policy.get("available")),
+            market=market if weight_profile == "china_local_v1" else {},
+            sector=sector,
+            snapshot=snapshot if weight_profile == "china_local_v1" else {},
+        )
+        total, factors = score_candidate(
+            signal,
+            stats,
+            snapshot,
+            news_score,
+            candidate,
+            weight_profile=weight_profile,
+            china_catalyst=china["score"] if weight_profile == "china_local_v1" else None,
+            policy_score=theme_policy.get("score") if weight_profile == "china_local_v1" and theme_policy.get("available") else None,
+        )
+        analyst = analyst_profile(
+            total,
+            signal,
+            stats,
+            snapshot,
+            news_score,
+            news_hits,
+            news_risks,
+            candidate,
+            china_catalyst_score=china["score"] if weight_profile == "china_local_v1" else None,
+            weight_profile=weight_profile,
+        )
         ranked.append(
             {
                 "candidate": asdict(candidate),
@@ -134,11 +222,23 @@ def rank_theme(
                 "factors": factors,
                 "analyst": analyst,
                 "formatted": format_candidate(candidate, snapshot, stats, news, total),
+                "china_catalyst": china if weight_profile == "china_local_v1" else None,
             }
         )
 
     ranked.sort(key=lambda item: item["score"], reverse=True)
-    return {"theme": asdict(theme), "signal": signal, "top": ranked[:top_n], "all": ranked}
+    return {
+        "theme": asdict(theme),
+        "signal": signal,
+        "top": ranked[:top_n],
+        "all": ranked,
+        "china_context": {
+            "policy_score": theme_policy.get("score"),
+            "policy_available": bool(theme_policy.get("available")),
+            "headlines": theme_policy.get("headlines") or [],
+            "sector": sector,
+        },
+    }
 
 
 def current_theme_signal(theme: Theme, provider: MarketProvider) -> dict[str, Any]:
@@ -228,8 +328,13 @@ def score_candidate(
     snapshot: dict[str, Any],
     news_score: float,
     candidate: Candidate,
+    *,
+    weight_profile: str = "legacy",
+    china_catalyst: Optional[float] = None,
+    policy_score: Optional[float] = None,
 ) -> tuple[float, dict[str, float]]:
-    signal_component = signal["score"] * 0.34
+    weights = SCORING_PROFILES.get(weight_profile, SCORING_PROFILES["legacy"])["weights"]
+    signal_component = signal["score"] * weights["signal"]
 
     hit_rate = stats.get("hit_rate")
     avg_after_signal = stats.get("avg_after_signal")
@@ -244,12 +349,12 @@ def score_candidate(
         history_raw += corr * 15
     if beta is not None:
         history_raw += clamp(beta, -1.5, 1.8) * 5
-    history_component = clamp(history_raw, 0, 100) * 0.32
+    history_component = clamp(history_raw, 0, 100) * weights["history"]
 
     day_pct = to_number(snapshot.get("pct")) or 0.0
     turnover = to_number(snapshot.get("turnover_rate")) or 0.0
     momentum_raw = 50 + clamp(day_pct, -6, 6) * 3 + clamp(turnover, 0, 12)
-    momentum_component = clamp(momentum_raw, 0, 100) * 0.12
+    momentum_component = clamp(momentum_raw, 0, 100) * weights["momentum"]
 
     market_cap = to_number(snapshot.get("market_cap"))
     liquidity_raw = 55
@@ -258,18 +363,23 @@ def score_candidate(
             liquidity_raw += 12
         elif market_cap < 8_000_000_000:
             liquidity_raw -= 14
-    liquidity_component = clamp(liquidity_raw, 0, 100) * 0.08
+    liquidity_component = clamp(liquidity_raw, 0, 100) * weights["liquidity"]
 
-    news_component = clamp(50 + news_score * 10, 0, 100) * 0.10
+    news_component = clamp(50 + news_score * 10, 0, 100) * weights["news"]
+    china_raw = 50.0 if china_catalyst is None else float(china_catalyst)
+    china_component = clamp(china_raw, 0, 100) * weights["china_catalyst"]
     risk_penalty = risk_penalty_points(snapshot, candidate, news_score)
+    if policy_score is not None and policy_score <= -3 and weights["china_catalyst"] > 0:
+        risk_penalty += min(6.0, abs(float(policy_score)))
 
-    total = signal_component + history_component + momentum_component + liquidity_component + news_component - risk_penalty
+    total = signal_component + history_component + momentum_component + liquidity_component + news_component + china_component - risk_penalty
     factors = {
         "signal": round(signal_component, 2),
         "history": round(history_component, 2),
         "momentum": round(momentum_component, 2),
         "liquidity": round(liquidity_component, 2),
         "news": round(news_component, 2),
+        "china_catalyst": round(china_component, 2),
         "risk_penalty": round(risk_penalty, 2),
     }
     return clamp(total, 0, 100), factors
@@ -284,6 +394,9 @@ def analyst_profile(
     news_hits: list[str],
     news_risks: list[str],
     candidate: Candidate,
+    *,
+    china_catalyst_score: Optional[float] = None,
+    weight_profile: str = "legacy",
 ) -> dict[str, Any]:
     catalyst = clamp(signal.get("score", 50), 0, 100)
     history_edge = history_edge_score(stats)
@@ -292,27 +405,42 @@ def analyst_profile(
     news = clamp(50 + news_score * 10, 0, 100)
     risk_points = risk_penalty_points(snapshot, candidate, news_score)
     risk_gate = risk_gate_for(snapshot, risk_points, news_risks)
-    conviction = conviction_score(catalyst, history_edge, quality_proxy, momentum, news, stats, risk_gate)
+    conviction = conviction_score(
+        catalyst,
+        history_edge,
+        quality_proxy,
+        momentum,
+        news,
+        stats,
+        risk_gate,
+        china=china_catalyst_score,
+        weight_profile=weight_profile,
+    )
     rating = analyst_rating(total, conviction, risk_gate)
     entry_plan = entry_plan_text(snapshot, rating)
     scenario = scenario_for(snapshot, stats, signal)
+    dimensions = {
+        "catalyst": round(catalyst, 1),
+        "history_edge": round(history_edge, 1),
+        "quality_proxy": round(quality_proxy, 1),
+        "momentum": round(momentum, 1),
+        "news": round(news, 1),
+        "risk": round(max(0, 100 - risk_points * 5), 1),
+    }
+    method = "Top-down catalyst + historical edge + liquidity/quality proxy + momentum + event/risk gate"
+    if weight_profile == "china_local_v1":
+        dimensions["china_catalyst"] = round(clamp(50 if china_catalyst_score is None else china_catalyst_score, 0, 100), 1)
+        method = "US catalyst + China local catalyst (policy, limit-up sentiment, sector move, turnover) + historical edge + liquidity proxy + event/risk gate. Research candidates only, not a buy order."
     return {
         "rating": rating,
         "conviction": round(conviction, 1),
         "risk_gate": risk_gate,
         "entry_plan": entry_plan,
         "scenario": scenario,
-        "dimensions": {
-            "catalyst": round(catalyst, 1),
-            "history_edge": round(history_edge, 1),
-            "quality_proxy": round(quality_proxy, 1),
-            "momentum": round(momentum, 1),
-            "news": round(news, 1),
-            "risk": round(max(0, 100 - risk_points * 5), 1),
-        },
+        "dimensions": dimensions,
         "positive_flags": news_hits[:4],
         "risk_flags": news_risks[:4],
-        "method": "Top-down catalyst + historical edge + liquidity/quality proxy + momentum + event/risk gate",
+        "method": method,
     }
 
 
@@ -399,8 +527,15 @@ def conviction_score(
     news: float,
     stats: dict[str, Any],
     risk_gate: str,
+    *,
+    china: Optional[float] = None,
+    weight_profile: str = "legacy",
 ) -> float:
-    score = catalyst * 0.26 + history_edge * 0.28 + quality_proxy * 0.16 + momentum * 0.15 + news * 0.15
+    if weight_profile == "china_local_v1":
+        china_score = 50.0 if china is None else china
+        score = catalyst * 0.20 + history_edge * 0.22 + quality_proxy * 0.14 + momentum * 0.12 + news * 0.12 + china_score * 0.20
+    else:
+        score = catalyst * 0.26 + history_edge * 0.28 + quality_proxy * 0.16 + momentum * 0.15 + news * 0.15
     signal_samples = stats.get("signal_samples") or 0
     if signal_samples >= 60:
         score += 5
@@ -575,6 +710,162 @@ def _empty_stats() -> dict[str, Any]:
         "corr": None,
         "beta": None,
     }
+
+
+def prepare_china_scoring(
+    themes: list[Theme],
+    provider: Any,
+    *,
+    report_date: date,
+    skip_macro: bool,
+    legacy_weights: bool,
+    now: datetime,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load local catalysts. Live tape is only applied when the report date is today."""
+    warnings: list[str] = []
+    use_live = report_date == now.date() and not legacy_weights
+    news: list[dict[str, Any]] = []
+    market: dict[str, Any] = {"available": False}
+    boards: list[dict[str, Any]] = []
+    if not use_live:
+        if legacy_weights:
+            warnings.append("已按 --legacy-weights 使用旧评分权重。")
+        elif skip_macro:
+            warnings.append("已跳过宏观/政策新闻。")
+        else:
+            warnings.append("历史日期不回填当日实时政策与盘口，评分回退到旧权重。")
+    else:
+        if skip_macro:
+            warnings.append("已跳过宏观/政策新闻抓取。")
+        else:
+            news = _provider_call(provider, "macro_news", [], 40) or []
+            if any(str(item.get("stale") or "") in {"1", "true"} for item in news):
+                warnings.append("宏观/政策新闻使用了过期缓存。")
+        market = _provider_call(provider, "market_overview", {"available": False}) or {"available": False}
+        if not market.get("available"):
+            warnings.append("涨停家数或两市成交额暂不可用。")
+        boards = _provider_call(provider, "sector_boards", [], 24) or []
+        if not boards:
+            warnings.append("板块涨幅暂不可用。")
+    macro = map_macro_news(news, themes, asof=now)
+    alive = bool(macro.get("available")) or bool(market.get("available")) or bool(boards)
+    profile = "china_local_v1" if use_live and alive else "legacy"
+    scoring = {
+        "profile": profile,
+        "requested_profile": "legacy" if legacy_weights else "china_local_v1",
+        "label": SCORING_PROFILES[profile]["label"],
+        "weights": SCORING_PROFILES[profile]["weights"],
+        "positive_weight_sum": round(sum(SCORING_PROFILES[profile]["weights"].values()), 2),
+        "note": SCORING_PROFILES[profile]["note"],
+        "fallback": "",
+        "warnings": warnings,
+    }
+    if scoring["requested_profile"] == "china_local_v1" and profile == "legacy":
+        scoring["fallback"] = "中国本地催化数据不可用或与报告日期不匹配，本次回退到旧权重，避免用缺失数据改写排序。"
+    return {"macro": macro, "market": market, "boards": boards, "warnings": warnings, "alive": alive}, scoring
+
+
+def china_catalyst_score(
+    *,
+    policy_score: Optional[float],
+    policy_available: bool,
+    market: Optional[dict[str, Any]],
+    sector: Optional[dict[str, Any]],
+    snapshot: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """0-100 local catalyst. Missing parts stay at the neutral 50 base and do not pretend to be news."""
+    score = 50.0
+    available = False
+    parts: dict[str, Any] = {}
+    if policy_available:
+        available = True
+        delta = clamp(float(policy_score or 0), -8, 8) * 3.0
+        score += delta
+        parts["policy"] = round(delta, 2)
+        parts["policy_raw"] = round(float(policy_score or 0), 3)
+    overview = market or {}
+    if overview.get("available") and overview.get("limit_up_count") is not None:
+        available = True
+        limit_up = float(overview["limit_up_count"])
+        limit_down = float(overview.get("limit_down_count") or 0)
+        sentiment = clamp((limit_up - 40) / 5.0, -10, 12) - clamp(limit_down / 8.0, 0, 8)
+        score += sentiment
+        parts["sentiment"] = round(sentiment, 2)
+        parts["limit_up_count"] = int(limit_up)
+        parts["limit_down_count"] = None if overview.get("limit_down_count") is None else int(limit_down)
+        parts["sentiment_trade_date"] = overview.get("trade_date") or ""
+    if sector and sector.get("pct") is not None:
+        available = True
+        sector_delta = clamp(float(sector["pct"]), -5, 5) * 2.0
+        score += sector_delta
+        parts["sector"] = round(sector_delta, 2)
+        parts["sector_name"] = sector.get("name") or ""
+        parts["sector_pct"] = sector.get("pct")
+    capital = _capital_points(snapshot or {})
+    if capital is not None:
+        available = True
+        score += capital
+        parts["capital"] = round(capital, 2)
+    return {"score": round(clamp(score, 0, 100), 2), "available": available, "parts": parts}
+
+
+def _capital_points(snapshot: dict[str, Any]) -> Optional[float]:
+    volume_ratio = to_number(snapshot.get("volume_ratio"))
+    turnover = to_number(snapshot.get("turnover_rate"))
+    amount = to_number(snapshot.get("amount"))
+    if volume_ratio is None and turnover is None and amount is None:
+        return None
+    points = 0.0
+    if volume_ratio is not None:
+        if volume_ratio >= 2:
+            points += 4
+        elif volume_ratio >= 1.3:
+            points += 2
+        elif volume_ratio < 0.6:
+            points -= 2
+    if turnover is not None:
+        if 2 <= turnover <= 10:
+            points += 2
+        elif turnover > 18:
+            points -= 3
+    if amount is not None and amount >= 1_000_000_000:
+        points += 2
+    return clamp(points, -6, 8)
+
+
+def _sector_leaders(boards: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    industries = [row for row in boards if row.get("board_type") != "concept" and row.get("pct") is not None]
+    industries.sort(key=lambda row: row.get("pct") or 0, reverse=True)
+    leaders = []
+    for row in industries[:limit]:
+        leaders.append(
+            {
+                "name": row.get("name"),
+                "pct": row.get("pct"),
+                "amount": row.get("amount"),
+                "source": row.get("source") or "",
+            }
+        )
+    return leaders
+
+
+def _public_market_overview(market: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "available": bool(market.get("available")),
+        "source": market.get("source") or "",
+        "trade_date": market.get("trade_date") or "",
+        "limit_up_count": market.get("limit_up_count"),
+        "limit_down_count": market.get("limit_down_count"),
+        "amount": market.get("amount"),
+        "note": market.get("note") or "",
+    }
+
+
+def _provider_call(provider: Any, name: str, default: Any, *args: Any) -> Any:
+    fn = getattr(provider, name, None)
+    if fn is None:
+        return default
+    return _safe_call(lambda: fn(*args) if args else fn(), default)
 
 
 def _safe_call(func, default):

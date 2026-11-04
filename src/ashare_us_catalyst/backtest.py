@@ -144,6 +144,8 @@ def backtest_ashare(
             "candidate_count": len(candidates),
             "theme_count": len(themes),
             "news_mode": "neutral_point_in_time_news_unavailable",
+            "weight_profile": "legacy",
+            "weight_note": "历史逐日的政策、涨停情绪和板块资金无法稳定复原，回测保持旧权重。",
         },
     }
 

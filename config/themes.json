@@ -12,6 +12,7 @@
       "id": "ai_compute_semis",
       "name": "AI算力 / 半导体 / 光模块",
       "logic": "美股 AI 芯片、存储、半导体设备和云资本开支上涨时，A 股常见映射是国产设备、AI 芯片、服务器、PCB、光模块和液冷。",
+      "policy_keywords": ["人工智能", "算力", "半导体", "芯片", "光模块", "集成电路", "数据中心", "国产替代"],
       "us_tickers": [
         {"ticker": "NVDA", "name": "英伟达", "weight": 2.0},
         {"ticker": "AMD", "name": "AMD", "weight": 1.4},
@@ -41,6 +42,7 @@
       "id": "ev_battery_storage",
       "name": "新能源车 / 锂电 / 储能",
       "logic": "特斯拉、美股新能源车、锂资源和储能链走强时，A 股映射到整车、动力电池、锂资源、材料和储能逆变器。",
+      "policy_keywords": ["新能源", "锂电池", "储能", "光伏", "新能源汽车", "动力电池", "充电桩", "以旧换新"],
       "us_tickers": [
         {"ticker": "TSLA", "name": "特斯拉", "weight": 2.0},
         {"ticker": "RIVN", "name": "Rivian", "weight": 1.0},
@@ -66,6 +68,7 @@
       "id": "innovative_drugs_medtech",
       "name": "创新药 / 医疗器械 / CXO",
       "logic": "美股创新药、减肥药、器械和生物科技上涨时，A 股通常映射创新药、医疗器械、CXO 和高端设备。",
+      "policy_keywords": ["创新药", "医保", "集采", "医疗器械", "生物医药"],
       "us_tickers": [
         {"ticker": "LLY", "name": "礼来", "weight": 1.6},
         {"ticker": "NVO", "name": "诺和诺德", "weight": 1.5},
@@ -90,6 +93,7 @@
       "id": "consumer_ecommerce_travel",
       "name": "消费 / 跨境电商 / 旅游",
       "logic": "美股中概消费、平台电商、旅游和全球消费龙头上涨时，A 股映射到免税、白酒、家电、跨境电商和游戏传媒。",
+      "policy_keywords": ["促消费", "免税", "旅游", "家电", "以旧换新", "消费复苏"],
       "us_tickers": [
         {"ticker": "BABA", "name": "阿里巴巴", "weight": 1.5},
         {"ticker": "PDD", "name": "拼多多", "weight": 1.5},
@@ -114,6 +118,7 @@
       "id": "commodities_energy_gold",
       "name": "有色 / 能源 / 黄金",
       "logic": "美股能源、铜、铝、黄金矿业和大宗商品链上涨时，A 股映射到铜、金、煤炭、油气和小金属。",
+      "policy_keywords": ["黄金", "有色", "原油", "煤炭", "稀土", "铜价"],
       "us_tickers": [
         {"ticker": "XOM", "name": "埃克森美孚", "weight": 1.2},
         {"ticker": "CVX", "name": "雪佛龙", "weight": 1.0},
@@ -139,6 +144,7 @@
       "id": "finance_brokerage_fintech",
       "name": "券商 / 金融科技 / 数字金融",
       "logic": "美股券商、交易所、金融科技和风险资产上涨时，A 股映射到券商、财富管理、金融 IT 和交易活跃度。",
+      "policy_keywords": ["券商", "资本市场", "印花税", "证券", "汇金", "平准", "降准", "降息"],
       "us_tickers": [
         {"ticker": "MS", "name": "摩根士丹利", "weight": 1.0},
         {"ticker": "GS", "name": "高盛", "weight": 1.0},
@@ -161,6 +167,7 @@
       "id": "robotics_industrial_auto",
       "name": "机器人 / 工业自动化",
       "logic": "美股自动化、机器人、工业软件和人形机器人链上涨时，A 股映射到伺服、减速器、执行器、传感器和工业控制。",
+      "policy_keywords": ["机器人", "人形机器人", "工业自动化", "智能制造", "设备更新"],
       "us_tickers": [
         {"ticker": "TER", "name": "泰瑞达", "weight": 1.0},
         {"ticker": "ROK", "name": "罗克韦尔自动化", "weight": 1.0},
@@ -183,6 +190,7 @@
       "id": "aerospace_defense",
       "name": "航空航天 / 军工",
       "logic": "美股航空航天、防务、商用飞机和卫星链上涨时，A 股映射到主机厂、发动机、航空材料和卫星互联网。",
+      "policy_keywords": ["商业航天", "卫星互联网", "军工", "航空航天", "低空经济", "大飞机"],
       "us_tickers": [
         {"ticker": "LMT", "name": "洛克希德马丁", "weight": 1.0},
         {"ticker": "RTX", "name": "RTX", "weight": 1.0},

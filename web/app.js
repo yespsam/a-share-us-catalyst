@@ -6,6 +6,7 @@ const state = {
   asia: null,
   multibagger: null,
   backtest: null,
+  intraday: null,
   history: [],
   dailyMarkdown: "",
   selected: null,
@@ -75,6 +76,7 @@ function switchView(view) {
   if (view === "evidence") renderBacktestPanel();
   if (view === "daily") renderDailyReport();
   if (view === "ashare") selectFirstAshare();
+  if (view === "intraday") renderIntraday();
   if (view === "us") selectFirstUs();
   if (view === "asia") selectFirstAsia();
   if (view === "multibagger") selectFirstMultibagger();
@@ -96,12 +98,20 @@ async function loadAll() {
   state.loading = true;
   setStatus(state.sample ? "正在加载样例数据" : "正在拉取实时行情，首次可能需要几十秒");
   try {
-    const [ashare, us, asia, multibagger, backtest] = await Promise.all([fetchAshare(), fetchUsQuality(), fetchAsiaMarkets(), fetchMultibagger(), fetchBacktest()]);
+    const [ashare, us, asia, multibagger, backtest, intraday] = await Promise.all([
+      fetchAshare(),
+      fetchUsQuality(),
+      fetchAsiaMarkets(),
+      fetchMultibagger(),
+      fetchBacktest(),
+      fetchIntraday().catch((error) => ({ result: null, error: error.message })),
+    ]);
     state.ashare = ashare.result;
     state.us = us.result;
     state.asia = asia.result;
     state.multibagger = multibagger.result;
     state.backtest = backtest.result;
+    state.intraday = intraday.result || null;
     state.dailyMarkdown = ashare.markdown || "";
     $("#reportPath").textContent = ashare.markdownPath ? compactPath(ashare.markdownPath) : "尚未生成";
     renderSummary(ashare.result, us.result);
@@ -111,6 +121,7 @@ async function loadAll() {
     renderAsiaTable();
     renderMultibaggerTable();
     renderBacktestPanel();
+    renderIntraday();
     renderDailyReport();
     loadHistory();
     await refreshAshareQuotes();
@@ -173,6 +184,15 @@ async function fetchBacktest() {
   return api(`/api/backtest?${params.toString()}`);
 }
 
+async function fetchIntraday() {
+  const params = new URLSearchParams({
+    sample: String(state.sample),
+    date: $("#reportDate").value,
+    topSectors: "8",
+  });
+  return api(`/api/intraday?${params.toString()}`);
+}
+
 async function loadHistory() {
   try {
     const data = await api("/api/history");
@@ -216,6 +236,7 @@ function staticFallbackFor(url) {
   if (url.startsWith("/api/multibagger")) return staticAsset("data/multibagger.json");
   if (url.startsWith("/api/backtest")) return staticAsset("data/backtest.json");
   if (url.startsWith("/api/history")) return staticAsset("data/history.json");
+  if (url.startsWith("/api/intraday")) return staticAsset("data/intraday.json");
   return "";
 }
 
@@ -254,6 +275,7 @@ function renderThemes() {
   const select = $("#themeFilter");
   const themes = state.ashare?.themes || [];
   select.innerHTML = `<option value="all">全部板块</option>` + themes.map((block) => `<option value="${escapeHtml(block.theme.name)}">${escapeHtml(block.theme.name)}</option>`).join("");
+  renderMacroStrip();
   $("#themeCards").innerHTML = themes
     .map((block, index) => {
       const width = Math.max(5, Math.min(100, block.signal.score));
@@ -270,6 +292,84 @@ function renderThemes() {
       renderAshareTable();
     });
   });
+}
+
+function renderMacroStrip() {
+  const el = $("#macroStrip");
+  if (!el) return;
+  const macro = state.ashare?.macro || {};
+  const scoring = state.ashare?.scoring || {};
+  const items = (macro.items || []).slice(0, 3);
+  const market = state.ashare?.china_market?.overview || {};
+  const bits = [];
+  if (scoring.label) bits.push(`<strong>${escapeHtml(scoring.label)}</strong>`);
+  if (market.available && market.limit_up_count != null) bits.push(`<span>涨停 ${escapeHtml(String(market.limit_up_count))} / 跌停 ${escapeHtml(String(market.limit_down_count ?? "暂无"))}</span>`);
+  if (scoring.fallback) bits.push(`<span>${escapeHtml(scoring.fallback)}</span>`);
+  const headlines = items.map((item) => `<li>${escapeHtml([item.time, item.title].filter(Boolean).join(" "))}</li>`).join("");
+  el.innerHTML = bits.length || headlines
+    ? `${bits.join("")}<ul class="macro-list">${headlines || "<li>暂无宏观/政策快讯</li>"}</ul>`
+    : "";
+}
+
+function renderIntraday() {
+  const mount = $("#intradayBody");
+  if (!mount) return;
+  const report = state.intraday;
+  if (!report) {
+    mount.innerHTML = `<div class="empty-state">盘中观察还没有数据。样例模式或实时接口可用后会显示在这里。</div>`;
+    return;
+  }
+  const market = report.market || {};
+  const sectors = report.sectors || {};
+  const anomalies = report.anomalies || {};
+  const flashes = report.policy_flashes || {};
+  const metrics = [
+    ["时段", report.session_label || "-"],
+    ["涨停", market.limit_up_count == null ? "暂无" : String(market.limit_up_count)],
+    ["跌停", market.limit_down_count == null ? "暂无" : String(market.limit_down_count)],
+    ["两市成交额", formatAmount(market.amount)],
+  ];
+  const sectorRows = [...(sectors.leaders || []), ...(sectors.laggards || [])];
+  mount.innerHTML = `
+    <div class="intraday-metrics">${metrics.map(([label, value]) => `<div><span class="metric-label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>
+    <div class="macro-note">${escapeHtml(report.risk_note || "")}${report.warnings?.length ? `<ul class="macro-list">${report.warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}</div>
+    <h3 class="section-gap">板块涨幅</h3>
+    ${sectorRows.length ? `<div class="table-wrap"><table><thead><tr><th>板块</th><th>涨跌</th><th>成交额</th><th>映射</th></tr></thead><tbody>${sectorRows.map((row) => `<tr><td>${escapeHtml(row.name || "")}</td><td>${pctBadge(formatPctNumber(row.pct))}</td><td>${escapeHtml(formatAmount(row.amount))}</td><td>${escapeHtml((row.themes || []).join("、") || "未映射")}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state">板块涨幅暂不可用。</div>`}
+    <h3 class="section-gap">候选池异动</h3>
+    ${(anomalies.rows || []).length ? `<div class="table-wrap"><table><thead><tr><th>股票</th><th>主题</th><th>涨跌</th><th>量比</th><th>标记</th></tr></thead><tbody id="intradayRows">${anomalies.rows.map((row, index) => `<tr data-intraday="${index}"><td><span class="stock-id"><strong>${escapeHtml(row.name || "")}</strong><span>${escapeHtml(row.code || "")}</span></span></td><td>${escapeHtml((row.themes || []).join("、"))}</td><td>${pctBadge(formatPctNumber(row.pct))}</td><td>${escapeHtml(row.volume_ratio == null ? "未知" : Number(row.volume_ratio).toFixed(2))}</td><td><span class="flag-row">${(row.flags || []).map((flag) => `<span class="flag-pill">${escapeHtml(flagLabel(flag))}</span>`).join("")}</span></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state">${escapeHtml(anomalies.message || "候选池内没有达到阈值的波动或放量。")}</div>`}
+    <h3 class="section-gap">政策快讯</h3>
+    ${(flashes.items || []).length ? `<ul class="macro-list">${flashes.items.map((item) => `<li>${item.breaking ? "突发 " : ""}${escapeHtml([item.time, item.title].filter(Boolean).join(" "))}</li>`).join("")}</ul>` : `<div class="empty-state">${escapeHtml(flashes.message || "窗口内没有新的宏观/政策快讯。")}</div>`}
+  `;
+  $$("#intradayRows tr").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const row = (anomalies.rows || [])[Number(tr.dataset.intraday)];
+      if (!row) return;
+      $("#detailType").textContent = "盘中异动";
+      $("#detailTitle").textContent = `${row.code} ${row.name}`;
+      $("#detailBody").classList.remove("empty-state");
+      $("#detailBody").innerHTML = `<section class="detail-section"><h3>观察</h3><div class="thesis-box">${escapeHtml(row.note || report.risk_note || "")}</div><p>标记：${escapeHtml((row.flags || []).map(flagLabel).join("、") || "无")}</p><p>行情来源：${escapeHtml(row.pct_source || "未知")} ${escapeHtml([row.pct_date, row.snapshot_time].filter(Boolean).join(" "))}</p></section>`;
+    });
+  });
+}
+
+function flagLabel(flag) {
+  return { limit_up: "涨停", limit_down: "跌停", large_up: "大涨", large_down: "大跌", volume_spike: "放量", active_turnover: "高换手" }[flag] || flag;
+}
+
+function formatPctNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "未知";
+  return `${num > 0 ? "+" : ""}${num.toFixed(2)}%`;
+}
+
+function formatAmount(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "暂无";
+  const abs = Math.abs(num);
+  if (abs >= 1e12) return `${(num / 1e12).toFixed(2)}万亿`;
+  if (abs >= 1e8) return `${(num / 1e8).toFixed(0)}亿`;
+  if (abs >= 1e4) return `${(num / 1e4).toFixed(0)}万`;
+  return num.toFixed(0);
 }
 
 function flattenAshare() {
@@ -517,6 +617,7 @@ function renderAshareDetail(row) {
       <div class="factor-row"><span>Quality Proxy</span>${factorTrack(dimensions.quality_proxy || 0, 100)}<strong>${num(dimensions.quality_proxy)}</strong></div>
       <div class="factor-row"><span>Momentum</span>${factorTrack(dimensions.momentum || 0, 100)}<strong>${num(dimensions.momentum)}</strong></div>
       <div class="factor-row"><span>News</span>${factorTrack(dimensions.news || 0, 100)}<strong>${num(dimensions.news)}</strong></div>
+      ${dimensions.china_catalyst == null ? "" : `<div class="factor-row"><span>中国催化</span>${factorTrack(dimensions.china_catalyst, 100)}<strong>${num(dimensions.china_catalyst)}</strong></div>`}
       <div class="factor-row"><span>Risk</span>${factorTrack(dimensions.risk || 0, 100)}<strong>${num(dimensions.risk)}</strong></div>
     </section>
     <section class="detail-section">
@@ -723,7 +824,7 @@ function renderBacktestPanel() {
   target.innerHTML = `
     <div class="evidence-note">
       <strong>数据支撑口径</strong>
-      <span>窗口 ${backtest.window_days || 182} 天；训练回看 ${backtest.lookback_days || 260} 天；只使用回测日之前 K 线和已完成美股交易日。历史新闻无法逐日归档，回测中按中性处理。</span>
+      <span>窗口 ${backtest.window_days || 182} 天；训练回看 ${backtest.lookback_days || 260} 天；只使用回测日之前 K 线和已完成美股交易日。历史新闻、政策和涨停情绪无法逐日复原，回测保持旧权重，新闻按中性处理。</span>
     </div>
     <div class="evidence-grid">
       ${summaryCard("A股 1日命中", fmtMetric(ashare.summary?.hit_rate_1d, "%"), `平均 ${fmtSigned(ashare.summary?.avg_return_1d)} / 超额 ${fmtSigned(ashare.summary?.excess_return_1d)}`)}

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from ..clock import shanghai_now
+
 import numpy as np
 import pandas as pd
 
@@ -68,6 +70,95 @@ class SampleProvider:
             }
             for i, title in enumerate(titles[:limit])
         ]
+
+    def macro_news(self, limit: int = 40) -> list[dict[str, str]]:
+        moment = shanghai_now()
+        stamp = moment.strftime("%Y-%m-%d")
+        items = [
+            {
+                "title": "央行开展逆回购并下调股票回购增持再贷款利率",
+                "summary": "公开市场保持流动性合理充裕，稳市工具加力。样例快讯，不是实时新闻。",
+                "time": f"{stamp} 08:30:00",
+                "source": "样例源",
+                "url": "",
+                "origin": "sample",
+            },
+            {
+                "title": "工信部：继续推进人工智能算力基础设施和芯片产业",
+                "summary": "产业政策提及算力、芯片和国产替代。样例快讯，不是实时新闻。",
+                "time": f"{stamp} 08:10:00",
+                "source": "样例源",
+                "url": "",
+                "origin": "sample",
+            },
+            {
+                "title": "证监会就减持新规征求意见，强调从严监管",
+                "summary": "资本市场规则预期转严。样例快讯，不是实时新闻。",
+                "time": f"{stamp} 07:50:00",
+                "source": "样例源",
+                "url": "",
+                "origin": "sample",
+            },
+            {
+                "title": "黄金与有色价格走强，资源板块情绪升温",
+                "summary": "黄金、有色链条受关注。样例快讯，不是实时新闻。",
+                "time": f"{stamp} 07:40:00",
+                "source": "样例源",
+                "url": "",
+                "origin": "sample",
+            },
+        ]
+        return items[:limit]
+
+    def market_overview(self) -> dict[str, Any]:
+        moment = shanghai_now()
+        return {
+            "available": True,
+            "source": "sample",
+            "asof": moment.isoformat(),
+            "trade_date": moment.date().isoformat(),
+            "limit_up_count": 42,
+            "limit_down_count": 6,
+            "amount": 835_000_000_000,
+            "advance": None,
+            "decline": None,
+            "indices": [
+                {"code": "000001", "name": "上证指数", "pct": 0.62, "amount": 420_000_000_000, "price": 3280.0, "source": "sample"},
+                {"code": "399001", "name": "深证成指", "pct": 0.84, "amount": 415_000_000_000, "price": 10880.0, "source": "sample"},
+            ],
+            "note": "离线样例，不是实时行情。",
+            "warnings": [],
+        }
+
+    def sector_boards(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = [
+            {"code": "BK0447", "name": "半导体", "pct": 3.4, "amount": 48_000_000_000, "turnover_rate": 4.2, "board_type": "industry", "source": "sample", "rank_side": "leader", "up_count": 70, "member_count": 90, "leader_name": "样例芯片", "leader_pct": 8.1},
+            {"code": "BK0732", "name": "机器人", "pct": 2.6, "amount": 18_000_000_000, "turnover_rate": 5.1, "board_type": "concept", "source": "sample", "rank_side": "leader", "leader_name": "样例自动化", "leader_pct": 6.4},
+            {"code": "BK0473", "name": "证券", "pct": 1.8, "amount": 32_000_000_000, "turnover_rate": 2.4, "board_type": "industry", "source": "sample", "rank_side": "leader", "up_count": 40, "member_count": 50, "leader_name": "样例券商", "leader_pct": 4.2},
+            {"code": "BK0478", "name": "有色金属", "pct": 1.2, "amount": 21_000_000_000, "turnover_rate": 2.1, "board_type": "industry", "source": "sample", "rank_side": "leader", "up_count": 30, "member_count": 45},
+            {"code": "BK0438", "name": "食品饮料", "pct": -1.6, "amount": 12_000_000_000, "turnover_rate": 0.8, "board_type": "industry", "source": "sample", "rank_side": "laggard", "up_count": 8, "member_count": 40},
+            {"code": "BK0428", "name": "电力", "pct": -0.7, "amount": 9_000_000_000, "turnover_rate": 0.6, "board_type": "industry", "source": "sample", "rank_side": "laggard", "up_count": 12, "member_count": 36},
+        ]
+        return rows[:limit]
+
+    def quote_candidates(self, codes: list[str]) -> dict[str, dict[str, Any]]:
+        overlay = {
+            "300308": {"pct": 12.4, "volume_ratio": 2.8, "turnover_rate": 6.2, "amount": 3_200_000_000, "price": 120.5},
+            "600030": {"pct": -6.1, "volume_ratio": 2.2, "turnover_rate": 4.1, "amount": 1_500_000_000, "price": 28.4},
+            "300059": {"pct": 5.4, "volume_ratio": 1.4, "turnover_rate": 3.3, "amount": 2_100_000_000, "price": 22.0},
+        }
+        quotes = {}
+        moment = shanghai_now()
+        for code in codes:
+            padded = str(code).zfill(6)
+            snapshot = dict(self.a_snapshot(padded))
+            snapshot.update(overlay.get(padded, {}))
+            snapshot["code"] = padded
+            snapshot["pct_source"] = "sample"
+            snapshot["pct_date"] = moment.date().isoformat()
+            snapshot["snapshot_time"] = moment.strftime("%H:%M:%S")
+            quotes[padded] = snapshot
+        return quotes
 
     def _series(self, start: date, end: date, drift: float, scale: float, seed: str) -> pd.DataFrame:
         dates = pd.bdate_range(start=start, end=end)
